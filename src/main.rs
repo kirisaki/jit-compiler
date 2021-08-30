@@ -5,18 +5,20 @@ use std::{ffi::c_void, mem, ptr::{null_mut}};
 const PAGE_SIZE: usize = 1024 * 1024;
 
 fn main() {
-    let program: Box<[u8]> = compile("".into(), PAGE_SIZE);
-    let memory: Box<[u8]> = Box::new([
-        0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x2c, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x21, 0x0a]);
+    let program: Box<[u8]> = compile(",+.".into());
+    let f: fn(*mut u8) -> *mut u8;
+    let res: *mut u8;
+    let p: *mut u8;
+    let m: *mut u8;
     unsafe {
-        let p = allocate(PAGE_SIZE) as *mut u8;
-        let m = allocate(14) as *mut u8;
+        p = allocate(program.len()) as *mut u8;
+        m = allocate(PAGE_SIZE) as *mut u8;
         println!("{:?} {:?}", p, m);
-        p.copy_from_nonoverlapping(program.as_ptr(), program.len());
-        m.copy_from_nonoverlapping(memory.as_ptr(), 14);
-        let f: fn(*mut u8) -> *mut u8 = mem::transmute(p);
-        println!("{:?}", f(m));
+        p.copy_from(program.as_ptr(), program.len());
+        f = mem::transmute(p);
     }
+    res = f(m);
+    println!("\n{:?}", res);
 }
 
 unsafe fn allocate(len: usize) -> *mut c_void {
@@ -38,16 +40,73 @@ unsafe fn allocate(len: usize) -> *mut c_void {
     q
 }
 
-fn compile(src: String, len: usize) -> Box<[u8]> {
-    let mut program: Vec<u8> = Vec::with_capacity(len); 
-    let mut p: Vec<u8> = vec!(
-        0x48, 0x8b, 0x74, 0x24, 0x30,
-        0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,
-        0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00, 0x00,
-        0x48, 0xC7, 0xC2, 0x0E, 0x00, 0x00, 0x00,
-        0x0F, 0x05,
-        0xc3,
+fn compile(src: String) -> Box<[u8]> {
+    let mut program: Vec<u8> = vec!(
+        // mov r15, rdi ; the current pointer at r15
+        0x49, 0x89, 0xff,
+        // mov rax, 0x0
+        0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00, 0x00,
     );
-    program.append(&mut p);
+    for c in src.as_str().chars() {
+        program.append(&mut match c {
+            // put a char
+            '.' => vec!(
+                // mov rax, 0x01
+                0x48, 0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00,
+                // mov rdi, 0x01
+                0x48, 0xc7, 0xc7, 0x01, 0x00, 0x00, 0x00,
+                // mov rsi, r15
+                0x4c, 0x89, 0xfe,
+                // mov rdx, 0x01
+                0x48, 0xc7, 0xc2, 0x01, 0x00, 0x00, 0x00,
+                // syscall
+                0x0f, 0x05,
+            ),
+            // read a char
+            ',' => vec!(
+                // mov rax, 0x00
+                0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00, 0x00,
+                // mov rdi, 0x00
+                0x48, 0xc7, 0xc7, 0x00, 0x00, 0x00, 0x00,
+                // mov rdx, 0x01
+                0x48, 0xc7, 0xc2, 0x01, 0x00, 0x00, 0x00,
+                // mov rsi, r15
+                0x4c, 0x89, 0xfe,
+                // syscall
+                0x0f, 0x05,
+            ),
+            // increment the value pointed by r15
+            '+' => vec!(
+                // mov ax, WORD PTR [r15]
+                0x66, 0x41, 0x8b, 0x07,
+                // inc ax
+                0x66, 0xff, 0xc0,
+                // mov WORD PTR [r15], ax
+                0x66, 0x41, 0x89, 0x07,
+            ),
+            // decrement the value pointed by r15
+            '-' => vec!(
+                // mov ax, WORD PTR [r15]
+                0x66, 0x41, 0x8b, 0x07,
+                // dec ax
+                0x66, 0xff, 0xc8,
+                // mov WORD PTR [r15], ax
+                0x66, 0x41, 0x89, 0x07,
+            ),
+            // increment the pointer
+            '>' => vec!(
+                // inc r15
+                0x49, 0xff, 0xc7,
+            ),
+            // decrement the pointer
+            '<' => vec!(
+                // dec r15
+                0x49, 0xff, 0xcf,
+            ),
+            _ => vec!(),
+        })
+    }
+    // program.append(&mut vec!(0x4c, 0x89, 0xf8));
+    program.append(&mut vec!(0xc3)); // ret
     program.into_boxed_slice()
 }
